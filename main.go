@@ -70,13 +70,14 @@ func main() {
 			continue
 		}
 		jsonData, _ := json.Marshal(v)
-		var tx *types.Transaction
+		var tx *rpcTransaction
 		err = json.Unmarshal(jsonData, &tx)
 		if err != nil {
 			panic(err)
 		}
 		fmt.Println("--------------------------------")
-		fmt.Println(tx.To().String())
+		fmt.Println(tx.txExtraInfo.BlockHash.String())
+		fmt.Println(tx.tx.To())
 	}
 }
 
