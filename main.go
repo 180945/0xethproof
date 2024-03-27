@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/light"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -14,14 +17,15 @@ import (
 	"github.com/pkg/errors"
 	"math/big"
 	"strconv"
+	"strings"
 )
 
 func main() {
 
 	//txHash := common.HexToHash("0xb23bd58950e36cc6505749d15a0bb043c3623bf85bec1e4a424283fb03b5b90f")
-
-	rpc := "https://eth.llamarpc.com"
-
+	//
+	rpc := "https://1rpc.io/eth"
+	//
 	//_, ethBlockHash, ethTxIdx, ethDepositProof, err := getETHDepositProof(rpc, txHash)
 	//if err != nil {
 	//	panic(err.Error())
@@ -34,9 +38,9 @@ func main() {
 	//if err != nil {
 	//	panic(err.Error())
 	//}
-
+	//
 	//fmt.Println(res)
-
+	//
 	//client, err := ethclient.Dial(rpc)
 	//if err != nil {
 	//	panic(err.Error())
@@ -48,7 +52,7 @@ func main() {
 	//}
 	//fmt.Println(block)
 
-	blockByNum, err := GetEVMHeaderByNumber(big.NewInt(19428643), rpc)
+	blockByNum, err := GetEVMHeaderByNumber(big.NewInt(19435758), rpc)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -76,9 +80,96 @@ func main() {
 			panic(err)
 		}
 		fmt.Println("--------------------------------")
-		fmt.Println(tx.txExtraInfo.BlockHash.String())
+		fmt.Println(tx.tx.Hash().String())
 		fmt.Println(tx.tx.To())
+		fmt.Println(tx.From)
 	}
+
+	client, err := ethclient.Dial(rpc)
+	if err != nil {
+		panic(err)
+	}
+
+	newOwner := []common.Address{
+		common.HexToAddress("0xb1C398DDf9f45eAcdB42487347950a54Cb0fB02F"),
+		common.HexToAddress("0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD"),
+		common.HexToAddress("0xF3fDcfbfdB96315FC628854627BDd5e363b3aDE4"),
+		common.HexToAddress("0x3F93129a61c0c60759a9A871DC683AE58E55209F"),
+		common.HexToAddress("0x70e8df8e5887b6Ca5A118B06E132fbBE69f0f736"),
+		common.HexToAddress("0xb1C398DDf9f45eAcdB42487347950a54Cb0fB02F"),
+		common.HexToAddress("0x073E9D8d85179d573b7C2fa99770b5eADDCD92a0"),
+	}
+
+	swapOwner(newOwner, common.HexToAddress("0x5b6e24479811E7edac7A5dBbE115E5c0b5D8effB"), common.HexToAddress("0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526"), client)
+}
+
+func swapOwner(newOwners []common.Address, safeAddr common.Address, multisendAddr common.Address, client *ethclient.Client) {
+	prevOwner := common.HexToAddress("0x0000000000000000000000000000000000000001")
+	safeAbi, _ := abi.JSON(strings.NewReader(SafeMetaData.ABI))
+	multiSendAbi, _ := abi.JSON(strings.NewReader(MultisendMetaData.ABI))
+
+	safeContract, _ := NewSafe(safeAddr, client)
+	oldOwners, _ := safeContract.GetOwners(nil)
+
+	var swapOwnerCallData []byte
+	for i, v := range newOwners {
+		swapOwnerTmp, err := safeAbi.Pack("swapOwner", prevOwner, oldOwners[i], v)
+		if err != nil {
+			panic(err.Error())
+		}
+
+		txData := []byte{}
+		txData = append(txData, byte(0))
+		txData = append(txData, safeAddr.Bytes()...)
+		temp := toByte32(big.NewInt(0).Bytes())
+		txData = append(txData, temp[:]...)
+		temp2 := make([]byte, 32)
+		temp3 := big.NewInt(int64(len(swapOwnerTmp))).Bytes()
+		temp2 = append(temp2, temp3...)
+		txData = append(txData, temp2[(len(temp3)):]...)
+		txData = append(txData, swapOwnerTmp...)
+
+		if err != nil {
+			panic(err)
+		}
+
+		swapOwnerCallData = append(swapOwnerCallData, txData...)
+	}
+
+	swapOwnerCallData, err := multiSendAbi.Pack("multiSend", swapOwnerCallData)
+	if err != nil {
+		panic(err)
+	}
+
+	nonce, err := safeContract.Nonce(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	encodeTx, err := safeContract.EncodeTransactionData(
+		nil,
+		multisendAddr,
+		big.NewInt(0),
+		swapOwnerCallData,
+		1,
+		big.NewInt(0),
+		big.NewInt(0),
+		big.NewInt(0),
+		common.Address{},
+		common.Address{},
+		nonce,
+	)
+
+	if err != nil {
+		panic(err)
+	}
+
+	//fmt.Println(hex.EncodeToString(swapOwnerCallData))
+	fmt.Println("--------------------------------")
+	fmt.Println(hex.EncodeToString(encodeTx))
+
+	// sign tx
+	// execute transaction
 }
 
 func VerifyProofAndParseEVMReceipt(
@@ -167,4 +258,10 @@ func GetEVMHeaderByNumber(blockNumber *big.Int, host string) (*RpcBlock, error) 
 	}
 
 	return getEVMHeaderByNumberRes.Result, nil
+}
+
+func toByte32(s []byte) [32]byte {
+	a := [32]byte{}
+	copy(a[:], s)
+	return a
 }
